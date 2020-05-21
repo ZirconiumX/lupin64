@@ -1,9 +1,9 @@
-from .common import *
+from vr4300.common import *
 
 from enum import Enum, unique
 
 from nmigen import *
-
+from nmigen.back import rtlil
 
 @unique
 class Instruction(Enum):
@@ -125,43 +125,6 @@ class Function(Enum):
 
 
 @unique
-class Register(Enum):
-    """A MIPS Register"""
-    ZERO    = 0
-    AT      = 1
-    V0      = 2
-    V1      = 3
-    A0      = 4
-    A1      = 5
-    A2      = 6
-    A3      = 7
-    T0      = 8
-    T1      = 9
-    T2      = 10
-    T3      = 11
-    T4      = 12
-    T5      = 13
-    T6      = 14
-    T7      = 15
-    S0      = 16
-    S1      = 17
-    S2      = 18
-    S3      = 19
-    S4      = 20
-    S5      = 21
-    S6      = 22
-    S7      = 23
-    T8      = 24
-    T9      = 25
-    K0      = 26
-    K1      = 27
-    GP      = 28
-    SP      = 29
-    FP      = 30
-    RA      = 31
-
-
-@unique
 class DecoderAbort(Enum):
     OK                 = 0
     IllegalInstruction = 1
@@ -175,9 +138,11 @@ class Decoder(Elaboratable):
         self.o_adder_op  = Signal(decoder=ALUAdder)
         self.o_logic_op  = Signal(decoder=ALULogic)
         self.o_resultmux = Signal(decoder=ALUResultMux)
+
         self.o_src_reg_1 = Signal(decoder=Register)
         self.o_src_reg_2 = Signal(decoder=Register)
         self.o_dest_reg  = Signal(decoder=Register)
+
         self.o_immediate = Signal(signed(32))
 
         self.o_use_imm   = Signal()
@@ -255,25 +220,13 @@ class Decoder(Elaboratable):
                     with m.Case(
                         Function.ADD, Function.ADDU, Function.SUB, Function.SUBU,
                     ):
-                        is_subtract = Signal()
-                        is_signed = Signal()
-
                         m.d.comb += [
-                            # Check operation for ALU.
-                            is_subtract.eq(funct.matches(Function.SUB, Function.SUBU)),
-                            # Overflow on "signed" instructions raises an exception.
-                            is_signed.eq(funct.matches(Function.ADD, Function.SUB))
-                        ]
-
-                        m.d.sync += [
-                            # 32-bit instructions get sign-extended to 64-bit.
-                            self.o_is_64bit.eq(funct.matches(Function.DADD, Function.DADDU, Function.DSUB, Function.DSUBU)),
                             # Select the appropriate ALU op.
-                            self.o_adder_op.eq(Mux(is_subtract, ALUAdder.Sub, ALUAdder.Add)),
+                            self.o_adder_op.eq(Mux(funct.matches(Function.SUB, Function.SUBU), ALUAdder.Sub, ALUAdder.Add)),
                             # These are legal instructions.
                             self.o_emu_abort.eq(0),
                             # "signed" instructions trap on overflow here.
-                            self.o_ovf_check.eq(is_signed)
+                            self.o_ovf_check.eq(funct.matches(Function.ADD, Function.SUB))
                         ]
 
                     with m.Case(
@@ -301,12 +254,7 @@ class Decoder(Elaboratable):
 
                 m.d.comb += [
                     # Overflow on "signed" instructions raises an exception.
-                    is_signed.eq(funct.matches(Function.ADDI, Function.DADDI))
-                ]
-
-                m.d.sync += [
-                    # 32-bit instructions get sign-extended to 64-bit.
-                    self.o_is_64bit.eq(funct.matches(Function.DADDI, Function.DADDIU)),
+                    is_signed.eq(funct.matches(Function.ADDI, Function.DADDI)),
                     # Load the immediate register
                     self.o_immediate.eq(imm16),
                     self.o_use_imm.eq(1),
@@ -324,19 +272,17 @@ class Decoder(Elaboratable):
                 is_signed = Signal()
 
                 m.d.comb += [
-                    is_signed.eq(funct.matches(Function.SLTI))
-                ]
+                    is_signed.eq(funct.matches(Function.SLTI)),
 
-                m.d.sync += [
-                    # Because MIPS always sign-extends values, we can treat this as an unconditional 64-bit operation.
-                    self.o_is_64bit.eq(1),
                     # Load the immediate register
                     self.o_immediate.eq(imm16),
                     self.o_use_imm.eq(1),
                     # Implement comparisons in terms of subtraction.
                     self.o_adder_op.eq(ALUAdder.Sub),
                     # These are legal instructions.
-                    self.o_ri_except.eq(0)
+                    self.o_emu_abort.eq(0)
                 ]
 
         return m
+
+rtlil.convert(Decoder())
